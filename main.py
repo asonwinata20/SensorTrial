@@ -16,6 +16,9 @@ from kivy.uix.scrollview import ScrollView
 
 import threading
 import queue
+import os    
+import csv   
+import time  
 from collections import deque
 
 from sensor_backmatter import SensorAcquisitionWorker
@@ -23,7 +26,7 @@ from sensor_backmatter import SensorAcquisitionWorker
 class TelemetryDashboard(App):
     def build(self):
         self.telemetry_queue = queue.Queue()
-        self.points_count = 100 # ⚡ Expanded to 100 points = Exactly 1.0 second of history at 100Hz
+        self.points_count = 100 
         
         # 14 Channels total
         self.buffers = [deque([0.0] * self.points_count, maxlen=self.points_count) for _ in range(14)]
@@ -31,6 +34,11 @@ class TelemetryDashboard(App):
         # Peak Memory tracking arrays
         self.flex_peaks = [0.0] * 5
         self.emg_peaks = [0.0] * 3
+        
+        # CSV Session containers
+        self.is_recording = False
+        self.session_data_log = []
+        self.recording_start_time = 0.0
         
         root_layout = BoxLayout(orientation='horizontal', spacing=5)
         with root_layout.canvas.before:
@@ -51,18 +59,21 @@ class TelemetryDashboard(App):
         self.btn_start = Button(text="Start Stream", font_size='14sp', size_hint=(1, 0.1))
         self.btn_stop = Button(text="Stop Stream", font_size='14sp', size_hint=(1, 0.1), disabled=True)
         self.btn_check = Button(text="Check Hardware", font_size='14sp', size_hint=(1, 0.1), background_color=(0.2, 0.5, 0.7, 1))
-        self.btn_reset_peaks = Button(text="Reset Peaks", font_size='14sp', size_hint=(1, 0.1), background_color=(0.7, 0.3, 0.3, 1))
+        self.btn_reset = Button(text="Reset Dashboard", font_size='14sp', size_hint=(1, 0.1), background_color=(0.7, 0.3, 0.3, 1))
+        
+        self.lbl_status_indicator = Label(text="STATUS: IDLE", font_size='12sp', bold=True, size_hint=(1, 0.08), color=(0.6, 0.6, 0.6, 1))
         
         self.btn_start.bind(on_press=self.start_stream)
         self.btn_stop.bind(on_press=self.stop_stream)
         self.btn_check.bind(on_press=self.trigger_i2c_check)
-        self.btn_reset_peaks.bind(on_press=self.reset_peak_memory)
+        self.btn_reset.bind(on_press=self.reset_entire_dashboard)
         
         sidebar.add_widget(self.btn_start)
         sidebar.add_widget(self.btn_stop)
         sidebar.add_widget(self.btn_check)
-        sidebar.add_widget(self.btn_reset_peaks)
-        sidebar.add_widget(Label(size_hint=(1, 0.5)))
+        sidebar.add_widget(self.btn_reset)
+        sidebar.add_widget(self.lbl_status_indicator)
+        sidebar.add_widget(Label(size_hint=(1, 0.42)))
         root_layout.add_widget(sidebar)
 
         # MAIN WORKSPACE AREA
@@ -72,6 +83,7 @@ class TelemetryDashboard(App):
         dashboard_grid = GridLayout(cols=3, spacing=10, size_hint_y=None)
         dashboard_grid.bind(minimum_height=dashboard_grid.setter('height'))
         
+        # 🛠️ Cleaned graph metadata titles
         graph_meta = [
             {"label": "F1 - THUMB (V)", "color": (1, 0.2, 0.2, 1)},
             {"label": "F2 - INDEX (V)", "color": (1, 0.6, 0.1, 1)},
@@ -117,7 +129,7 @@ class TelemetryDashboard(App):
         scroll_window.add_widget(dashboard_grid)
         right_workspace.add_widget(scroll_window)
         
-        # Lower Telemetry Console Display
+        # Lower Telemetry Console Display Panel
         data_panel = BoxLayout(orientation='horizontal', size_hint=(1, 0.25), padding=10, spacing=10)
         with data_panel.canvas.before:
             Color(0.12, 0.13, 0.15, 1)
@@ -130,8 +142,9 @@ class TelemetryDashboard(App):
         )
         self.lbl_hand_data.bind(size=self.lbl_hand_data.setter('text_size'))
         
+        # 🛠️ Cleaned panel titles
         self.lbl_emg_data = Label(
-            text="EMG AMPLITUDE ENVELOPES (CURRENT / PEAK):\nEMG1: --V (--V)\nEMG2 : --V (--V)\nEMG3 : --V (--V)",
+            text="EMG PROFILES (CURRENT / PEAK):\nEMG1: --V (--V)\nEMG2: --V (--V)\nEMG3: --V (--V)",
             font_size='12sp', bold=True, halign='left', valign='middle', color=(1.0, 0.4, 1.0, 1)
         )
         self.lbl_emg_data.bind(size=self.lbl_emg_data.setter('text_size'))
@@ -155,45 +168,97 @@ class TelemetryDashboard(App):
         self.worker_thread = threading.Thread(target=self.worker.main_loop)
         self.worker_thread.daemon = True
         self.worker_thread.start()
-        # Scheduled consumer loop poll rate (triggered safely at ~60Hz screen refresh match)
         Clock.schedule_interval(self.update_telemetry_ui, 0.016)
 
     def start_stream(self, instance):
+        self.session_data_log.clear()
+        self.recording_start_time = time.time()
+        self.is_recording = True
+        
         self.worker.is_streaming = True
         self.btn_start.disabled = True
         self.btn_stop.disabled = False
+        self.lbl_status_indicator.text = "STATUS: RECORDING"
+        self.lbl_status_indicator.color = (1, 0.3, 0.3, 1)
 
     def stop_stream(self, instance):
         self.worker.is_streaming = False
         self.btn_start.disabled = False
         self.btn_stop.disabled = True
+        
+        self.is_recording = False
+        self.save_recorded_session_to_csv()
 
-    def reset_peak_memory(self, instance):
+    def save_recorded_session_to_csv(self):
+        if not self.session_data_log:
+            self.lbl_status_indicator.text = "STATUS: NO DATA"
+            self.lbl_status_indicator.color = (0.6, 0.6, 0.6, 1)
+            return
+
+        self.lbl_status_indicator.text = "STATUS: SAVING..."
+        self.lbl_status_indicator.color = (1, 1, 0.3, 1)
+
+        counter = 1
+        while os.path.exists(f"emgimuflex-data_{counter}.csv"):
+            counter += 1
+        target_filename = f"emgimuflex-data_{counter}.csv"
+
+        try:
+            with open(target_filename, mode='w', newline='') as csv_file:
+                writer = csv.writer(csv_file)
+                writer.writerow([
+                    'Relative_Time_Sec', 
+                    'Flex_1', 'Flex_2', 'Flex_3', 'Flex_4', 'Flex_5',
+                    'EMG_1', 'EMG_2', 'EMG_3',
+                    'Accel_X', 'Accel_Y', 'Accel_Z',
+                    'Gyro_X', 'Gyro_Y', 'Gyro_Z'
+                ])
+                writer.writerows(self.session_data_log)
+                
+            print(f"📝 Clean export complete -> {target_filename}")
+            self.lbl_status_indicator.text = f"SAVED: _{counter}.csv"
+            self.lbl_status_indicator.color = (0.3, 1, 0.3, 1)
+        except Exception as e:
+            print(f"❌ Error writing CSV file format: {e}")
+            self.lbl_status_indicator.text = "STATUS: WRITE ERR"
+            self.lbl_status_indicator.color = (1, 0.3, 0.3, 1)
+
+        self.session_data_log.clear()
+
+    def reset_entire_dashboard(self, instance):
+        """Wipes all 14 visual waveform history tracks, zeroes out sensor peaks, and locks readouts to a true 0 baseline."""
+        self.buffers = [deque([0.0] * self.points_count, maxlen=self.points_count) for _ in range(14)]
         self.flex_peaks = [0.0] * 5
         self.emg_peaks = [0.0] * 3
-        f_curr = [self.buffers[i][-1] if self.buffers[i] else 0.0 for i in range(5)]
-        e_curr = [self.buffers[5 + i][-1] if self.buffers[5 + i] else 0.0 for i in range(3)]
         
         self.lbl_hand_data.text = (
-            f"FLEX SENSORS (CURRENT / PEAK):\n"
-            f"F1: {f_curr[0]:.2f}V (0.00V) | F2: {f_curr[1]:.2f}V (0.00V)\n"
-            f"F3: {f_curr[2]:.2f}V (0.00V) | F4: {f_curr[3]:.2f}V (0.00V)\n"
-            f"F5: {f_curr[4]:.2f}V (0.00V)"
+            f"FLEX SENSORS (NOW / MAX):\n"
+            f"F1: 0.00V (0.00V) | F2: 0.00V (0.00V)\n"
+            f"F3: 0.00V (0.00V) | F4: 0.00V (0.00V)\n"
+            f"F5: 0.00V (0.00V)"
         )
+        
+        # 🛠️ Cleaned reset layout strings
         self.lbl_emg_data.text = (
-            f"EMG ENVELOPES (CURRENT / PEAK):\n"
-            f"EMG1 : {e_curr[0]:.2f}V (0.00V)\n"
-            f"EMG2 : {e_curr[1]:.2f}V (0.00V)\n"
-            f"EMG3 : {e_curr[2]:.2f}V (0.00V)"
+            f"EMG PROFILES (NOW / MAX):\n"
+            f"EMG1: 0.00V (0.00V)\n"
+            f"EMG2: 0.00V (0.00V)\n"
+            f"EMG3: 0.00V (0.00V)"
         )
+        
+        self.lbl_motion_data.text = (
+            f"6-AXIS IMU METRICS:\n"
+            f"ACC: X:+0.00g | Y:+0.00g | Z:+0.00g\n"
+            f"GYR: X:+0000 | Y:+0000 | Z:+0000"
+        )
+        
+        self.redraw_grid_waveforms()
 
     def trigger_i2c_check(self, instance):
         _, status_msg = self.worker.check_i2c_status()
         content = BoxLayout(orientation='vertical', padding=15, spacing=15)
-        lbl = Label(text=status_msg, font_size='15sp', halign='center', valign='middle')
-        lbl.bind(size=lbl.setter('text_size'))
-        content.add_widget(lbl)
         close_btn = Button(text="Dismiss", size_hint=(1, 0.3))
+        content.add_widget(Label(text=status_msg, font_size='15sp', halign='center'))
         content.add_widget(close_btn)
         popup = Popup(title="🎛️ Hardware Scan Pass", content=content, size_hint=(0.55, 0.42))
         close_btn.bind(on_press=popup.dismiss)
@@ -203,8 +268,6 @@ class TelemetryDashboard(App):
         has_new_data = False
         latest_f, latest_emg, latest_a, latest_g = None, None, None, None
 
-        # ⚡ HIGH-THROUGHPUT CONSUMER: Flush and empty the multi-packet queue entirely.
-        # This pipes every single 100Hz hardware update point into the chart arrays.
         while True:
             try:
                 frame = self.telemetry_queue.get_nowait()
@@ -213,7 +276,6 @@ class TelemetryDashboard(App):
                 latest_a = frame['accel']
                 latest_g = frame['gyro']
                 
-                # Push every raw datum chronologically into the ring buffers
                 for i in range(5):
                     if latest_f[i] > self.flex_peaks[i]: self.flex_peaks[i] = latest_f[i]
                     self.buffers[i].append(latest_f[i])
@@ -225,24 +287,35 @@ class TelemetryDashboard(App):
                 for i in range(3): self.buffers[8 + i].append(latest_a[i])
                 for i in range(3): self.buffers[11 + i].append(latest_g[i])
                 
+                if self.is_recording:
+                    relative_timestamp = time.time() - self.recording_start_time
+                    row_entry = [
+                        f"{relative_timestamp:.4f}", 
+                        latest_f[0], latest_f[1], latest_f[2], latest_f[3], latest_f[4],
+                        latest_emg[0], latest_emg[1], latest_emg[2],
+                        latest_a[0], latest_a[1], latest_a[2],
+                        latest_g[0], latest_g[1], latest_g[2]
+                    ]
+                    self.session_data_log.append(row_entry)
+                
                 has_new_data = True
             except queue.Empty:
-                break # Queue is completely cleared out
+                break 
             
         if has_new_data:
-            # Refresh numeric string labels matching only the absolute freshest frame info
             self.lbl_hand_data.text = (
-                f"FLEX SENSORS (CURRENT / PEAK):\n"
+                f"FLEX SENSORS (NOW / MAX):\n"
                 f"F1: {latest_f[0]:.2f}V ({self.flex_peaks[0]:.2f}V) | F2: {latest_f[1]:.2f}V ({self.flex_peaks[1]:.2f}V)\n"
                 f"F3: {latest_f[2]:.2f}V ({self.flex_peaks[2]:.2f}V) | F4: {latest_f[3]:.2f}V ({self.flex_peaks[3]:.2f}V)\n"
                 f"F5: {latest_f[4]:.2f}V ({self.flex_peaks[4]:.2f}V)"
             )
             
+            # 🛠️ Cleaned real-time tracking strings
             self.lbl_emg_data.text = (
-                f"EMG ENVELOPES (CURRENT / PEAK):\n"
-                f"EMG1 : {latest_emg[0]:.2f}V ({self.emg_peaks[0]:.2f}V)\n"
-                f"EMG2 : {latest_emg[1]:.2f}V ({self.emg_peaks[1]:.2f}V)\n"
-                f"EMG3  : {latest_emg[2]:.2f}V ({self.emg_peaks[2]:.2f}V)"
+                f"EMG PROFILES (NOW / MAX):\n"
+                f"EMG1: {latest_emg[0]:.2f}V ({self.emg_peaks[0]:.2f}V)\n"
+                f"EMG2: {latest_emg[1]:.2f}V ({self.emg_peaks[1]:.2f}V)\n"
+                f"EMG3: {latest_emg[2]:.2f}V ({self.emg_peaks[2]:.2f}V)"
             )
             
             self.lbl_motion_data.text = (
