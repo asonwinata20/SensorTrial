@@ -144,7 +144,7 @@ class TelemetryDashboard(App):
         
         # 🛠️ Cleaned panel titles
         self.lbl_emg_data = Label(
-            text="EMG PROFILES (CURRENT / PEAK):\nEMG1: --V (--V)\nEMG2: --V (--V)\nEMG3: --V (--V)",
+            text="EMG PROFILES (CURRENT / PEAK):\nEMG1: -- (--)\nEMG2: -- (--)\nEMG3: -- (--)",
             font_size='12sp', bold=True, halign='left', valign='middle', color=(1.0, 0.4, 1.0, 1)
         )
         self.lbl_emg_data.bind(size=self.lbl_emg_data.setter('text_size'))
@@ -241,9 +241,9 @@ class TelemetryDashboard(App):
         # 🛠️ Cleaned reset layout strings
         self.lbl_emg_data.text = (
             f"EMG PROFILES (NOW / MAX):\n"
-            f"EMG1: 0.00V (0.00V)\n"
-            f"EMG2: 0.00V (0.00V)\n"
-            f"EMG3: 0.00V (0.00V)"
+            f"EMG1: 0.00 (0.00)\n"
+            f"EMG2: 0.00 (0.00)\n"
+            f"EMG3: 0.00 (0.00)"
         )
         
         self.lbl_motion_data.text = (
@@ -313,9 +313,9 @@ class TelemetryDashboard(App):
             # 🛠️ Cleaned real-time tracking strings
             self.lbl_emg_data.text = (
                 f"EMG PROFILES (NOW / MAX):\n"
-                f"EMG1: {latest_emg[0]:.2f}V ({self.emg_peaks[0]:.2f}V)\n"
-                f"EMG2: {latest_emg[1]:.2f}V ({self.emg_peaks[1]:.2f}V)\n"
-                f"EMG3: {latest_emg[2]:.2f}V ({self.emg_peaks[2]:.2f}V)"
+                f"EMG1: {latest_emg[0]:.2f} ({self.emg_peaks[0]:.2f})\n"
+                f"EMG2: {latest_emg[1]:.2f} ({self.emg_peaks[1]:.2f})\n"
+                f"EMG3: {latest_emg[2]:.2f} ({self.emg_peaks[2]:.2f})"
             )
             
             self.lbl_motion_data.text = (

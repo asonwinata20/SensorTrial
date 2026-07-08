@@ -3,7 +3,10 @@ import random
 
 # --- HARDWARE INTEGRATION GUARD ---
 try:
-    import smbus
+    import board
+    import busio
+    import adafruit_ads1x15.ads1115 as ADS
+    from adafruit_ads1x15.analog_in import AnalogIn
     from DFRobot_ICG20660L import DFRobot_ICG20660L_IIC
     HARDWARE_AVAILABLE = True
 except ImportError:
@@ -16,14 +19,35 @@ class SensorAcquisitionWorker:
         self.is_streaming = False
         self.hardware_initialized = False 
         
-        # Target Hardware Addresses
         self.ADC1_ADDR = 0x48  
         self.ADC2_ADDR = 0x4A  
 
     def initialize_hardware_inside_thread(self):
         if HARDWARE_AVAILABLE and not self.hardware_initialized:
             try:
-                self.bus = smbus.SMBus(1)
+                self.i2c = busio.I2C(board.SCL, board.SDA, frequency=400000)
+                
+                # Configure Primary ADC (0x48) -> Channels 0, 1, 2, 3
+                self.ads1 = ADS.ADS1115(self.i2c, address=self.ADC1_ADDR)
+                self.ads1.gain = 1
+                self.ads1.data_rate = 860
+                
+                self.ch_f1 = AnalogIn(self.ads1, 0)
+                self.ch_f2 = AnalogIn(self.ads1, 1)
+                self.ch_f3 = AnalogIn(self.ads1, 2)
+                self.ch_f4 = AnalogIn(self.ads1, 3)
+                
+                # Configure Secondary ADC (0x4A) -> Channels 0, 1, 2, 3
+                self.ads2 = ADS.ADS1115(self.i2c, address=self.ADC2_ADDR)
+                self.ads2.gain = 1
+                self.ads2.data_rate = 860
+                
+                self.ch_f5 = AnalogIn(self.ads2, 0)
+                self.ch_emg1 = AnalogIn(self.ads2, 1)
+                self.ch_emg2 = AnalogIn(self.ads2, 2)
+                self.ch_emg3 = AnalogIn(self.ads2, 3)
+                
+                # Configure IMU
                 self.imu = DFRobot_ICG20660L_IIC(addr=DFRobot_ICG20660L_IIC.IIC_ADDR_SDO_H)
                 while self.imu.begin(self.imu.eREG_MODE) != 0:
                     time.sleep(0.5)
@@ -31,79 +55,83 @@ class SensorAcquisitionWorker:
                 self.imu.config_gyro(scale=self.imu.eFSR_G_500DPS, bd=self.imu.eGYRO_DLPF_176_1KHZ)
                 self.imu.config_accel(scale=self.imu.eFSR_A_16G, bd=self.imu.eACCEL_DLPF_218_1KHZ)
                 self.imu.set_sample_div(div=19)
+                
                 self.hardware_initialized = True
-                print("⚡ 100Hz Multi-Channel Hardware Pipeline Online.")
+                print("🚀 Adafruit 15-bit Positive Single-Ended Pipeline Online (Max 32767).")
             except Exception as e:
-                print(f"❌ Error binding hardware: {e}")
+                print(f"❌ Critical error during hardware pipeline init: {e}")
 
     def check_i2c_status(self):
         if not HARDWARE_AVAILABLE:
-            return True, "💻 LAPTOP SIMULATION MODE\n\nNo physical I2C hardware detected.\nRunning framework via synthetic telemetry streams safely."
+            return True, "💻 LAPTOP SIMULATION MODE\n\nNo physical I2C hardware detected."
+        if not self.hardware_initialized:
+            return False, "⚠️ PIPELINE UNINITIALIZED\n\nStart the stream once to verify active objects."
         try:
-            self.bus.read_i2c_block_data(self.ADC1_ADDR, 0x00, 2)
-            self.bus.read_i2c_block_data(self.ADC2_ADDR, 0x00, 2)
-            return True, "✅ ALL SYSTEMS NOMINAL\n\nI2C Bus Scan Successful:\n• IMU verified (0x69)\n• ADS1115 Primary verified (0x48)\n• ADS1115 Secondary verified (0x4A)"
-        except OSError as e:
-            return False, f"❌ I2C BUS COUPLING FAILURE\n\nDetails: {str(e)}"
+            _ = self.ch_f1.value
+            _ = self.ch_emg1.value
+            return True, "✅ ALL CHANNELS OPERATIONAL\n\nAdafruit CircuitPython Core verified:\n• ADC 0x48 Active\n• ADC 0x4A Active\n• IMU registers bound"
+        except Exception as e:
+            return False, f"❌ HARDWARE UNSTABLE\n\nConnection trace dropped:\n{str(e)}"
 
-    def read_raw_voltage(self, i2c_addr, channel):
+    # 🛠️ RENAMED: Changed read_raw_voltage to read_raw_adc
+    def read_raw_adc(self, analog_channel_object):
         if not HARDWARE_AVAILABLE or not self.hardware_initialized:
-            return 0.0
-            
-        # ⚡ SPEED OVERCLOCK: Changed low configuration byte from 0x83 to 0xE3 to trigger 860 SPS mode
-        mux_map = {
-            0: [0xC3, 0xE3], 
-            1: [0xD3, 0xE3], 
-            2: [0xE3, 0xE3], 
-            3: [0xF3, 0xE3]
-        }
+            return 0
         try:
-            self.bus.write_i2c_block_data(i2c_addr, 0x01, mux_map.get(channel, mux_map[0]))
-            # ⚡ Reduced settling delay from 9ms to 1.2ms (matching the 860 SPS window limits)
-            time.sleep(0.0012)
-            data = self.bus.read_i2c_block_data(i2c_addr, 0x00, 2)
-            raw_adc = (data[0] << 8) | data[1]
-            if raw_adc > 32767: raw_adc -= 65536
-            return raw_adc * 4.096 / 32768.0
-        except OSError:
-            return 0.0
+            return analog_channel_object.value
+        except Exception:
+            return 0
 
     def main_loop(self):
         if HARDWARE_AVAILABLE:
             self.initialize_hardware_inside_thread()
 
+        target_sample_rate = 100    
+        sample_interval = 1.0 / target_sample_rate  
+        next_sample_time = time.perf_counter()
+
         while self.running:
             if self.is_streaming:
-                loop_start = time.time() # Start stopwatch frame anchor
+                current_time = time.perf_counter()
+                
+                if current_time < next_sample_time:
+                    time_remaining = next_sample_time - current_time
+                    if time_remaining > 0.005:
+                        time.sleep(time_remaining - 0.002)
+                    while time.perf_counter() < next_sample_time:
+                        pass
                 
                 if HARDWARE_AVAILABLE and self.hardware_initialized:
-                    f1 = self.read_raw_voltage(self.ADC1_ADDR, channel=0)
-                    f2 = self.read_raw_voltage(self.ADC1_ADDR, channel=1)
-                    f3 = self.read_raw_voltage(self.ADC1_ADDR, channel=2)
-                    f4 = self.read_raw_voltage(self.ADC1_ADDR, channel=3)
-                    
-                    f5 = self.read_raw_voltage(self.ADC2_ADDR, channel=0)
-                    emg1 = self.read_raw_voltage(self.ADC2_ADDR, channel=1)
-                    emg2 = self.read_raw_voltage(self.ADC2_ADDR, channel=2)
-                    emg3 = self.read_raw_voltage(self.ADC2_ADDR, channel=3)
-                    
                     try:
+                        # Direct register pulls mapping raw counts securely
+                        f1 = self.read_raw_adc(self.ch_f1)
+                        f2 = self.read_raw_adc(self.ch_f2)
+                        f3 = self.read_raw_adc(self.ch_f3)
+                        f4 = self.read_raw_adc(self.ch_f4)
+                        f5 = self.read_raw_adc(self.ch_f5)
+                        
+                        emg1 = self.read_raw_adc(self.ch_emg1)
+                        emg2 = self.read_raw_adc(self.ch_emg2)
+                        emg3 = self.read_raw_adc(self.ch_emg3)
+                        
                         sensor = self.imu.get_sensor_data()
                         ax, ay, az = sensor['accel']['x'], sensor['accel']['y'], sensor['accel']['z']
                         gx, gy, gz = sensor['gyro']['x'], sensor['gyro']['y'], sensor['gyro']['z']
-                    except OSError:
+                    except Exception:
+                        f1, f2, f3, f4, f5 = 0, 0, 0, 0, 0
+                        emg1, emg2, emg3 = 0, 0, 0
                         ax, ay, az, gx, gy, gz = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
                 else:
-                    # Laptop Simulation Mode (Fires smooth curves at 100Hz)
-                    f1, f2, f3, f4, f5 = [round(random.uniform(1.5, 3.3), 2) for _ in range(5)]
+                    # Synthetic integer generation within true 15-bit boundaries
+                    f1, f2, f3, f4, f5 = [random.randint(12000, 26000) for _ in range(5)]
                     ax, ay, az = [round(random.uniform(-0.8, 0.8), 2) for _ in range(3)]
                     gx, gy, gz = [round(random.uniform(-120.0, 120.0), 1) for _ in range(3)]
-                    emg1 = round(random.uniform(0.1, 0.4), 2)
-                    emg2 = round(random.uniform(0.1, 0.4), 2)
-                    emg3 = round(random.uniform(0.2, 0.5), 2)
-                    if random.random() > 0.94: emg1 = round(random.uniform(1.8, 3.2), 2)
-                    if random.random() > 0.94: emg2 = round(random.uniform(1.5, 2.9), 2)
-                    if random.random() > 0.94: emg3 = round(random.uniform(2.0, 3.4), 2)
+                    emg1 = random.randint(800, 4000)
+                    emg2 = random.randint(800, 3500)
+                    emg3 = random.randint(1000, 4500)
+                    if random.random() > 0.94: emg1 = random.randint(18000, 29000)
+                    if random.random() > 0.94: emg2 = random.randint(15000, 27000)
+                    if random.random() > 0.94: emg3 = random.randint(20000, 31000)
 
                 telemetry_frame = {
                     'flex': [f1, f2, f3, f4, f5],
@@ -113,10 +141,7 @@ class SensorAcquisitionWorker:
                 }
                 self.data_queue.put(telemetry_frame)
                 
-                # ⚡ DYNAMIC INTERVAL LOCK: Calculate elapsed hardware execution time 
-                # and sleep precisely for the remainder of the 10ms target frame window.
-                elapsed = time.time() - loop_start
-                sleep_padding = max(0.0001, 0.010 - elapsed) 
-                time.sleep(sleep_padding)
+                next_sample_time += sample_interval
             else:
-                time.sleep(0.05) # Idle pacing while waiting to start stream
+                time.sleep(0.05)
+                next_sample_time = time.perf_counter()
