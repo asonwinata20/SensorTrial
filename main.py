@@ -31,11 +31,10 @@ class TelemetryDashboard(App):
         # 14 Channels total
         self.buffers = [deque([0.0] * self.points_count, maxlen=self.points_count) for _ in range(14)]
         
-        # Peak Memory tracking arrays
+        # Split Peak Memory arrays (Flex uses floats, EMG uses ints)
         self.flex_peaks = [0.0] * 5
-        self.emg_peaks = [0.0] * 3
+        self.emg_peaks = [0] * 3
         
-        # CSV Session containers
         self.is_recording = False
         self.session_data_log = []
         self.recording_start_time = 0.0
@@ -83,16 +82,16 @@ class TelemetryDashboard(App):
         dashboard_grid = GridLayout(cols=3, spacing=10, size_hint_y=None)
         dashboard_grid.bind(minimum_height=dashboard_grid.setter('height'))
         
-        # 🛠️ Cleaned graph metadata titles
+        # 🛠️ Rebalanced units in UI graph headers
         graph_meta = [
             {"label": "F1 - THUMB (V)", "color": (1, 0.2, 0.2, 1)},
             {"label": "F2 - INDEX (V)", "color": (1, 0.6, 0.1, 1)},
             {"label": "F3 - MIDDLE (V)", "color": (1, 0.9, 0.1, 1)},
             {"label": "F4 - RING (V)", "color": (0.2, 0.9, 0.2, 1)},
             {"label": "F5 - PINKY (V)", "color": (0.1, 0.7, 1, 1)},
-            {"label": "EMG 1 (ADC)", "color": (1, 0.1, 1, 1)},
-            {"label": "EMG 2 (ADC)", "color": (0.8, 0.2, 1, 1)},
-            {"label": "EMG 3 (ADC)", "color": (0.5, 0.4, 1, 1)},
+            {"label": "EMG 1 (RAW)", "color": (1, 0.1, 1, 1)},
+            {"label": "EMG 2 (RAW)", "color": (0.8, 0.2, 1, 1)},
+            {"label": "EMG 3 (RAW)", "color": (0.5, 0.4, 1, 1)},
             {"label": "ACCELEROMETER - X (g)", "color": (0.3, 0.9, 0.6, 1)},
             {"label": "ACCELEROMETER - Y (g)", "color": (0.8, 0.4, 1, 1)},
             {"label": "ACCELEROMETER - Z (g)", "color": (0.9, 0.8, 0.6, 1)},
@@ -136,13 +135,13 @@ class TelemetryDashboard(App):
             self.panel_bg = Rectangle()
         data_panel.bind(size=self.update_panel_bg, pos=self.update_panel_bg)
         
+        # 🛠️ Re-appended 'V' token indicators to flex string block
         self.lbl_hand_data = Label(
             text="FLEX TRACKING (CURRENT / PEAK):\nF1: --V (--V) | F2: --V (--V) | F3: --V (--V)\nF4: --V (--V) | F5: --V (--V)",
             font_size='12sp', bold=True, halign='left', valign='middle', color=(0.9, 0.9, 0.9, 1)
         )
         self.lbl_hand_data.bind(size=self.lbl_hand_data.setter('text_size'))
         
-        # 🛠️ Cleaned panel titles
         self.lbl_emg_data = Label(
             text="EMG PROFILES (CURRENT / PEAK):\nEMG1: -- (--)\nEMG2: -- (--)\nEMG3: -- (--)",
             font_size='12sp', bold=True, halign='left', valign='middle', color=(1.0, 0.4, 1.0, 1)
@@ -206,30 +205,30 @@ class TelemetryDashboard(App):
         try:
             with open(target_filename, mode='w', newline='') as csv_file:
                 writer = csv.writer(csv_file)
+                # 🛠️ Reflecting split data scales across headings map
                 writer.writerow([
                     'Relative_Time_Sec', 
-                    'Flex_1', 'Flex_2', 'Flex_3', 'Flex_4', 'Flex_5',
-                    'EMG_1', 'EMG_2', 'EMG_3',
+                    'Flex_1_V', 'Flex_2_V', 'Flex_3_V', 'Flex_4_V', 'Flex_5_V',
+                    'EMG_1_Raw', 'EMG_2_Raw', 'EMG_3_Raw',
                     'Accel_X', 'Accel_Y', 'Accel_Z',
                     'Gyro_X', 'Gyro_Y', 'Gyro_Z'
                 ])
                 writer.writerows(self.session_data_log)
                 
-            print(f"📝 Clean export complete -> {target_filename}")
+            print(f"📝 Hybrid session data complete -> {target_filename}")
             self.lbl_status_indicator.text = f"SAVED: _{counter}.csv"
             self.lbl_status_indicator.color = (0.3, 1, 0.3, 1)
         except Exception as e:
-            print(f"❌ Error writing CSV file format: {e}")
+            print(f"❌ Error writing CSV file: {e}")
             self.lbl_status_indicator.text = "STATUS: WRITE ERR"
             self.lbl_status_indicator.color = (1, 0.3, 0.3, 1)
 
         self.session_data_log.clear()
 
     def reset_entire_dashboard(self, instance):
-        """Wipes all 14 visual waveform history tracks, zeroes out sensor peaks, and locks readouts to a true 0 baseline."""
         self.buffers = [deque([0.0] * self.points_count, maxlen=self.points_count) for _ in range(14)]
         self.flex_peaks = [0.0] * 5
-        self.emg_peaks = [0.0] * 3
+        self.emg_peaks = [0] * 3
         
         self.lbl_hand_data.text = (
             f"FLEX SENSORS (NOW / MAX):\n"
@@ -237,21 +236,17 @@ class TelemetryDashboard(App):
             f"F3: 0.00V (0.00V) | F4: 0.00V (0.00V)\n"
             f"F5: 0.00V (0.00V)"
         )
-        
-        # 🛠️ Cleaned reset layout strings
         self.lbl_emg_data.text = (
             f"EMG PROFILES (NOW / MAX):\n"
-            f"EMG1: 0.00 (0.00)\n"
-            f"EMG2: 0.00 (0.00)\n"
-            f"EMG3: 0.00 (0.00)"
+            f"EMG1: 0 (0)\n"
+            f"EMG2: 0 (0)\n"
+            f"EMG3: 0 (0)"
         )
-        
         self.lbl_motion_data.text = (
             f"6-AXIS IMU METRICS:\n"
             f"ACC: X:+0.00g | Y:+0.00g | Z:+0.00g\n"
             f"GYR: X:+0000 | Y:+0000 | Z:+0000"
         )
-        
         self.redraw_grid_waveforms()
 
     def trigger_i2c_check(self, instance):
@@ -303,6 +298,7 @@ class TelemetryDashboard(App):
                 break 
             
         if has_new_data:
+            # 🛠️ Formatted flex to string decimals again
             self.lbl_hand_data.text = (
                 f"FLEX SENSORS (NOW / MAX):\n"
                 f"F1: {latest_f[0]:.2f}V ({self.flex_peaks[0]:.2f}V) | F2: {latest_f[1]:.2f}V ({self.flex_peaks[1]:.2f}V)\n"
@@ -310,12 +306,11 @@ class TelemetryDashboard(App):
                 f"F5: {latest_f[4]:.2f}V ({self.flex_peaks[4]:.2f}V)"
             )
             
-            # 🛠️ Cleaned real-time tracking strings
             self.lbl_emg_data.text = (
                 f"EMG PROFILES (NOW / MAX):\n"
-                f"EMG1: {latest_emg[0]:.2f} ({self.emg_peaks[0]:.2f})\n"
-                f"EMG2: {latest_emg[1]:.2f} ({self.emg_peaks[1]:.2f})\n"
-                f"EMG3: {latest_emg[2]:.2f} ({self.emg_peaks[2]:.2f})"
+                f"EMG1: {latest_emg[0]} ({self.emg_peaks[0]})\n"
+                f"EMG2: {latest_emg[1]} ({self.emg_peaks[1]})\n"
+                f"EMG3: {latest_emg[2]} ({self.emg_peaks[2]})"
             )
             
             self.lbl_motion_data.text = (
@@ -340,12 +335,17 @@ class TelemetryDashboard(App):
             pts = []
             for idx, val in enumerate(buf):
                 x = w_x + (idx * x_step)
-                if i < 8:
-                    y = w_y + (max(0.0, min(4.0, val)) / 4.0) * w_h
-                elif i < 11:
+                
+                # 🛠️ SPLIT RENDERING MATHEMATICS MATRIX
+                if i < 5:     # Channels 0-4: Flex Sensors (Voltage scaled to 4.096V Full-Scale Range)
+                    y = w_y + (max(0.0, min(4.096, val)) / 4.096) * w_h
+                elif i < 8:   # Channels 5-7: EMG Muscle Sensors (Raw integers scaled to 32767 limit)
+                    y = w_y + (max(0.0, min(32767.0, val)) / 32767.0) * w_h
+                elif i < 11:  # Channels 8-10: Accelerometer Axes (-2.0g to +2.0g limits)
                     y = w_y + max(0.0, min(1.0, (val + 2.0) / 4.0)) * w_h
-                else:
+                else:         # Channels 11-13: Gyroscope Axes (-250dps to +250dps limits)
                     y = w_y + max(0.0, min(1.0, (val + 250.0) / 500.0)) * w_h
+                    
                 pts.extend([x, y])
             line.points = pts
 
