@@ -27,7 +27,7 @@ class SensorAcquisitionWorker:
             try:
                 self.i2c = busio.I2C(board.SCL, board.SDA, frequency=400000)
                 
-                # Configure Primary ADC (0x48) -> Channels 0, 1, 2, 3
+                # Configure Primary ADC (0x48) -> Flex 1 to Flex 4
                 self.ads1 = ADS.ADS1115(self.i2c, address=self.ADC1_ADDR)
                 self.ads1.gain = 1
                 self.ads1.data_rate = 860
@@ -37,7 +37,7 @@ class SensorAcquisitionWorker:
                 self.ch_f3 = AnalogIn(self.ads1, 2)
                 self.ch_f4 = AnalogIn(self.ads1, 3)
                 
-                # Configure Secondary ADC (0x4A) -> Channels 0, 1, 2, 3
+                # Configure Secondary ADC (0x4A) -> Flex 5 + EMG 1 to EMG 3
                 self.ads2 = ADS.ADS1115(self.i2c, address=self.ADC2_ADDR)
                 self.ads2.gain = 1
                 self.ads2.data_rate = 860
@@ -57,7 +57,7 @@ class SensorAcquisitionWorker:
                 self.imu.set_sample_div(div=19)
                 
                 self.hardware_initialized = True
-                print("🚀 Adafruit 15-bit Positive Single-Ended Pipeline Online (Max 32767).")
+                print("🚀 Hybrid Data Pipeline Online (Flex: Voltage | EMG: Raw ADC).")
             except Exception as e:
                 print(f"❌ Critical error during hardware pipeline init: {e}")
 
@@ -67,14 +67,23 @@ class SensorAcquisitionWorker:
         if not self.hardware_initialized:
             return False, "⚠️ PIPELINE UNINITIALIZED\n\nStart the stream once to verify active objects."
         try:
-            _ = self.ch_f1.value
+            _ = self.ch_f1.voltage
             _ = self.ch_emg1.value
-            return True, "✅ ALL CHANNELS OPERATIONAL\n\nAdafruit CircuitPython Core verified:\n• ADC 0x48 Active\n• ADC 0x4A Active\n• IMU registers bound"
+            return True, "✅ ALL CHANNELS OPERATIONAL\n\nPipeline status verified across hybrid formats."
         except Exception as e:
             return False, f"❌ HARDWARE UNSTABLE\n\nConnection trace dropped:\n{str(e)}"
 
-    # 🛠️ RENAMED: Changed read_raw_voltage to read_raw_adc
-    def read_raw_adc(self, analog_channel_object):
+    # 🛠️ Helper for Flex channels (Voltage)
+    def read_voltage(self, analog_channel_object):
+        if not HARDWARE_AVAILABLE or not self.hardware_initialized:
+            return 0.0
+        try:
+            return analog_channel_object.voltage
+        except Exception:
+            return 0.0
+
+    # 🛠️ Helper for EMG channels (Raw ADC Counts)
+    def read_adc(self, analog_channel_object):
         if not HARDWARE_AVAILABLE or not self.hardware_initialized:
             return 0
         try:
@@ -103,27 +112,28 @@ class SensorAcquisitionWorker:
                 
                 if HARDWARE_AVAILABLE and self.hardware_initialized:
                     try:
-                        # Direct register pulls mapping raw counts securely
-                        f1 = self.read_raw_adc(self.ch_f1)
-                        f2 = self.read_raw_adc(self.ch_f2)
-                        f3 = self.read_raw_adc(self.ch_f3)
-                        f4 = self.read_raw_adc(self.ch_f4)
-                        f5 = self.read_raw_adc(self.ch_f5)
+                        # Flex reads fetch Voltages
+                        f1 = self.read_voltage(self.ch_f1)
+                        f2 = self.read_voltage(self.ch_f2)
+                        f3 = self.read_voltage(self.ch_f3)
+                        f4 = self.read_voltage(self.ch_f4)
+                        f5 = self.read_voltage(self.ch_f5)
                         
-                        emg1 = self.read_raw_adc(self.ch_emg1)
-                        emg2 = self.read_raw_adc(self.ch_emg2)
-                        emg3 = self.read_raw_adc(self.ch_emg3)
+                        # EMG reads fetch Raw 15-bit Digital Counts
+                        emg1 = self.read_adc(self.ch_emg1)
+                        emg2 = self.read_adc(self.ch_emg2)
+                        emg3 = self.read_adc(self.ch_emg3)
                         
                         sensor = self.imu.get_sensor_data()
                         ax, ay, az = sensor['accel']['x'], sensor['accel']['y'], sensor['accel']['z']
                         gx, gy, gz = sensor['gyro']['x'], sensor['gyro']['y'], sensor['gyro']['z']
                     except Exception:
-                        f1, f2, f3, f4, f5 = 0, 0, 0, 0, 0
+                        f1, f2, f3, f4, f5 = 0.0, 0.0, 0.0, 0.0, 0.0
                         emg1, emg2, emg3 = 0, 0, 0
                         ax, ay, az, gx, gy, gz = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
                 else:
-                    # Synthetic integer generation within true 15-bit boundaries
-                    f1, f2, f3, f4, f5 = [random.randint(12000, 26000) for _ in range(5)]
+                    # Mock data splits float and integer ranges matching formats
+                    f1, f2, f3, f4, f5 = [round(random.uniform(1.5, 3.3), 2) for _ in range(5)]
                     ax, ay, az = [round(random.uniform(-0.8, 0.8), 2) for _ in range(3)]
                     gx, gy, gz = [round(random.uniform(-120.0, 120.0), 1) for _ in range(3)]
                     emg1 = random.randint(800, 4000)
