@@ -23,7 +23,7 @@ from collections import deque
 
 from sensor_backmatter import SensorAcquisitionWorker
 
-class TelemetryDashboard(App):
+class ScrollTelemetryDashboard(App):
     def build(self):
         self.telemetry_queue = queue.Queue()
         self.points_count = 100 
@@ -38,6 +38,9 @@ class TelemetryDashboard(App):
         self.is_recording = False
         self.session_data_log = []
         self.recording_start_time = 0.0
+        
+        # 📂 Absolute path mapping to enforce target root folder visibility on Pi OS
+        self.project_directory = os.path.dirname(os.path.abspath(__file__))
         
         root_layout = BoxLayout(orientation='horizontal', spacing=5)
         with root_layout.canvas.before:
@@ -82,7 +85,6 @@ class TelemetryDashboard(App):
         dashboard_grid = GridLayout(cols=3, spacing=10, size_hint_y=None)
         dashboard_grid.bind(minimum_height=dashboard_grid.setter('height'))
         
-        # 🛠️ Rebalanced units in UI graph headers
         graph_meta = [
             {"label": "F1 - THUMB (V)", "color": (1, 0.2, 0.2, 1)},
             {"label": "F2 - INDEX (V)", "color": (1, 0.6, 0.1, 1)},
@@ -135,13 +137,14 @@ class TelemetryDashboard(App):
             self.panel_bg = Rectangle()
         data_panel.bind(size=self.update_panel_bg, pos=self.update_panel_bg)
         
-        # 🛠️ Re-appended 'V' token indicators to flex string block
+        # Flex labels track Volts
         self.lbl_hand_data = Label(
             text="FLEX TRACKING (CURRENT / PEAK):\nF1: --V (--V) | F2: --V (--V) | F3: --V (--V)\nF4: --V (--V) | F5: --V (--V)",
             font_size='12sp', bold=True, halign='left', valign='middle', color=(0.9, 0.9, 0.9, 1)
         )
         self.lbl_hand_data.bind(size=self.lbl_hand_data.setter('text_size'))
         
+        # 🛠️ SANITIZED: Removed all 'V' characters from the EMG readout strings
         self.lbl_emg_data = Label(
             text="EMG PROFILES (CURRENT / PEAK):\nEMG1: -- (--)\nEMG2: -- (--)\nEMG3: -- (--)",
             font_size='12sp', bold=True, halign='left', valign='middle', color=(1.0, 0.4, 1.0, 1)
@@ -188,6 +191,7 @@ class TelemetryDashboard(App):
         self.is_recording = False
         self.save_recorded_session_to_csv()
 
+    # --- 📂 AUTOMATED FILE SYSTEM EXPORT ENGINE (ABSOLUTE WORKSPACE MOUNT) ---
     def save_recorded_session_to_csv(self):
         if not self.session_data_log:
             self.lbl_status_indicator.text = "STATUS: NO DATA"
@@ -197,15 +201,20 @@ class TelemetryDashboard(App):
         self.lbl_status_indicator.text = "STATUS: SAVING..."
         self.lbl_status_indicator.color = (1, 1, 0.3, 1)
 
+        # ⚡ ABSOLUTE PI COMPILATION CHECK: Scan using full absolute paths
         counter = 1
-        while os.path.exists(f"emgimuflex-data_{counter}.csv"):
+        while True:
+            check_path = os.path.join(self.project_directory, f"emgimuflex-data_{counter}.csv")
+            if not os.path.exists(check_path):
+                break
             counter += 1
+            
         target_filename = f"emgimuflex-data_{counter}.csv"
+        absolute_export_path = os.path.join(self.project_directory, target_filename)
 
         try:
-            with open(target_filename, mode='w', newline='') as csv_file:
+            with open(absolute_export_path, mode='w', newline='') as csv_file:
                 writer = csv.writer(csv_file)
-                # 🛠️ Reflecting split data scales across headings map
                 writer.writerow([
                     'Relative_Time_Sec', 
                     'Flex_1_V', 'Flex_2_V', 'Flex_3_V', 'Flex_4_V', 'Flex_5_V',
@@ -215,11 +224,11 @@ class TelemetryDashboard(App):
                 ])
                 writer.writerows(self.session_data_log)
                 
-            print(f"📝 Hybrid session data complete -> {target_filename}")
+            print(f"📝 Data exported safely to absolute repository destination -> {absolute_export_path}")
             self.lbl_status_indicator.text = f"SAVED: _{counter}.csv"
             self.lbl_status_indicator.color = (0.3, 1, 0.3, 1)
         except Exception as e:
-            print(f"❌ Error writing CSV file: {e}")
+            print(f"❌ Error writing CSV file to disk: {e}")
             self.lbl_status_indicator.text = "STATUS: WRITE ERR"
             self.lbl_status_indicator.color = (1, 0.3, 0.3, 1)
 
@@ -298,7 +307,6 @@ class TelemetryDashboard(App):
                 break 
             
         if has_new_data:
-            # 🛠️ Formatted flex to string decimals again
             self.lbl_hand_data.text = (
                 f"FLEX SENSORS (NOW / MAX):\n"
                 f"F1: {latest_f[0]:.2f}V ({self.flex_peaks[0]:.2f}V) | F2: {latest_f[1]:.2f}V ({self.flex_peaks[1]:.2f}V)\n"
@@ -306,6 +314,7 @@ class TelemetryDashboard(App):
                 f"F5: {latest_f[4]:.2f}V ({self.flex_peaks[4]:.2f}V)"
             )
             
+            # 🛠️ SANITIZED: Displaying direct raw integer variables without formatting symbols or 'V' tokens
             self.lbl_emg_data.text = (
                 f"EMG PROFILES (NOW / MAX):\n"
                 f"EMG1: {latest_emg[0]} ({self.emg_peaks[0]})\n"
@@ -336,14 +345,14 @@ class TelemetryDashboard(App):
             for idx, val in enumerate(buf):
                 x = w_x + (idx * x_step)
                 
-                # 🛠️ SPLIT RENDERING MATHEMATICS MATRIX
-                if i < 5:     # Channels 0-4: Flex Sensors (Voltage scaled to 4.096V Full-Scale Range)
+                # Split Rendering Bounds Matrix Check
+                if i < 5:     # Flex (Voltage scaled to 4.096V full limits)
                     y = w_y + (max(0.0, min(4.096, val)) / 4.096) * w_h
-                elif i < 8:   # Channels 5-7: EMG Muscle Sensors (Raw integers scaled to 32767 limit)
+                elif i < 8:   # EMG (Raw counts scaled to 32767 peak limit)
                     y = w_y + (max(0.0, min(32767.0, val)) / 32767.0) * w_h
-                elif i < 11:  # Channels 8-10: Accelerometer Axes (-2.0g to +2.0g limits)
+                elif i < 11:  # Accelerometer (-2.0g to +2.0g limits)
                     y = w_y + max(0.0, min(1.0, (val + 2.0) / 4.0)) * w_h
-                else:         # Channels 11-13: Gyroscope Axes (-250dps to +250dps limits)
+                else:         # Gyroscope (-250 dps to +250 dps limits)
                     y = w_y + max(0.0, min(1.0, (val + 250.0) / 500.0)) * w_h
                     
                 pts.extend([x, y])
@@ -354,4 +363,4 @@ class TelemetryDashboard(App):
     def update_panel_bg(self, instance, value): self.panel_bg.pos, self.panel_bg.size = instance.pos, instance.size
 
 if __name__ == '__main__':
-    TelemetryDashboard().run()
+    ScrollTelemetryDashboard().run()
