@@ -23,7 +23,7 @@ from collections import deque
 
 from sensor_backmatter import SensorAcquisitionWorker
 
-class ScrollTelemetryDashboard(App):
+class TelemetryDashboard(App):
     def build(self):
         self.telemetry_queue = queue.Queue()
         self.points_count = 100 
@@ -363,4 +363,4 @@ class ScrollTelemetryDashboard(App):
     def update_panel_bg(self, instance, value): self.panel_bg.pos, self.panel_bg.size = instance.pos, instance.size
 
 if __name__ == '__main__':
-    ScrollTelemetryDashboard().run()
+    TelemetryDashboard().run()
